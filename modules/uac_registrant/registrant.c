@@ -1084,6 +1084,8 @@ int run_mi_reg_list(void *e_data, void *data, void *r_data)
 		rec->dest_ip.len=len;
 		if (add_mi_string(record_item, MI_SSTR("ip"), p, len) < 0)
 			goto error;
+		rec->dest_port= ntohs(rec->td.forced_to_su.sin.sin_port);
+		LM_DBG("custom_port=[%d]\n", rec->dest_port);
 		break;
 	default:
 		LM_ERR("unexpected sa_family [%d]\n", rec->td.forced_to_su.s.sa_family);
