@@ -94,6 +94,7 @@ typedef struct reg_record {
 	unsigned int flags;
 	struct reg_record *prev;
 	struct reg_record *next;
+	unsigned short dest_port;
 } reg_record_t;
 
 typedef struct reg_entry {
