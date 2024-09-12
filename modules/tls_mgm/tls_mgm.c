@@ -1305,7 +1305,7 @@ static int init_tls_dom(struct tls_domain *d)
 
 
 		SSL_CTX_set_verify(d->ctx[i], verify_mode, verify_callback);
-		SSL_CTX_set_verify_depth(d->ctx[i], VERIFY_DEPTH_S);
+		SSL_CTX_set_verify_depth(d->ctx[i], 0);
 
 		//SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER );
 		SSL_CTX_set_session_cache_mode(d->ctx[i], SSL_SESS_CACHE_OFF );
