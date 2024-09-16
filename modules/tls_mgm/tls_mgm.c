@@ -749,7 +749,7 @@ static void get_ssl_ctx_verify_mode(struct tls_domain *d, int *verify_mode)
 	 *           int (*verify_callback)(int, X509_STORE_CTX *)
 	 * Also, depth 2 may be not enough in some scenarios ... though no need
 	 * to increase it much further */
-
+	d->verify_cert=0;
 	if (d->flags & DOM_FLAG_SRV) {
 		/* Server mode:
 		 * SSL_VERIFY_NONE
@@ -772,7 +772,7 @@ static void get_ssl_ctx_verify_mode(struct tls_domain *d, int *verify_mode)
 		 *   a renegotiation. This flag must be used together with
 		 *   SSL_VERIFY_PEER.
 		 */
-
+		
 		if( d->verify_cert ) {
 			*verify_mode = SSL_VERIFY_PEER;
 			if( d->require_client_cert ) {
