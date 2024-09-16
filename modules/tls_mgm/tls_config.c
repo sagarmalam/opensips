@@ -46,9 +46,9 @@ int             tls_default_method = TLS_USE_SSLv23;
  */
 
 /* enable certificate validation as default value */
-int             tls_verify_client_cert  = 1;
-int             tls_verify_server_cert  = 1;
-int             tls_require_client_cert = 1;
+int             tls_verify_client_cert  = 0;
+int             tls_verify_server_cert  = 0;
+int             tls_require_client_cert = 0;
 /* disable CRL validation for all the certificates from the chain */
 int crl_check_all = 0;
 /* default location of certificates */
