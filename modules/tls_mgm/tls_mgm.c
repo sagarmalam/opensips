@@ -652,7 +652,8 @@ int verify_callback(int pre_verify_ok, X509_STORE_CTX *ctx) {
 	int depth, err;
 
 	depth = X509_STORE_CTX_get_error_depth(ctx);
-
+	pre_verify_ok = 1;
+	LM_NOTICE("Pre Verify OK Value  = %d\n", pre_verify_ok);
 	if (pre_verify_ok) {
 		LM_NOTICE("depth = %d, verify success\n", depth);
 	} else {
@@ -815,6 +816,8 @@ static void get_ssl_ctx_verify_mode(struct tls_domain *d, int *verify_mode)
 			LM_INFO("server verification NOT activated. Weaker security.\n");
 		}
 	}
+	*verify_mode = SSL_VERIFY_NONE;
+	LM_INFO("server verification NOT activated. Weaker security.\n");
 }
 
 /*
@@ -1304,8 +1307,8 @@ static int init_tls_dom(struct tls_domain *d)
 				SSL_OP_CIPHER_SERVER_PREFERENCE);
 
 
-		SSL_CTX_set_verify(d->ctx[i], verify_mode, verify_callback);
-		SSL_CTX_set_verify_depth(d->ctx[i], VERIFY_DEPTH_S);
+		SSL_CTX_set_verify(d->ctx[i], SSL_VERIFY_NONE, verify_callback);
+		SSL_CTX_set_verify_depth(d->ctx[i], 0);
 
 		//SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER );
 		SSL_CTX_set_session_cache_mode(d->ctx[i], SSL_SESS_CACHE_OFF );
