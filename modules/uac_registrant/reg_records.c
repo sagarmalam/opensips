@@ -40,11 +40,13 @@ int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
 void reg_print_record(reg_record_t *rec) {
 	LM_DBG("checking uac=[%p] state=[%d][%.*s] expires=[%d]"
 			" last_register_sent=[%d] registration_timeout=[%d]"
+			" failed_attempts=[%d] next_retry_time=[%ld] current_retry_delay=[%u]"
 			" auth_user[%p][%d]->[%.*s] auth_password=[%p][%d]->[%.*s]"
 			" sock=[%p] clustering=[%.*s/%d] enabled=[%s]\n",
 		rec, rec->state,
 		uac_reg_state[rec->state].len, uac_reg_state[rec->state].s, rec->expires,
 		(unsigned int)rec->last_register_sent, (unsigned int)rec->registration_timeout,
+		rec->failed_attempts, (long)rec->next_retry_time, rec->current_retry_delay,
 		rec->auth_user.s, rec->auth_user.len, rec->auth_user.len, rec->auth_user.s,
 		rec->auth_password.s, rec->auth_password.len,
 		rec->auth_password.len, rec->auth_password.s, rec->td.send_sock,
@@ -325,6 +327,11 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 
 	/* Setting the flags */
 	record->flags = uac->flags;
+	
+	/* Initialize retry fields */
+	record->failed_attempts = 0;
+	record->next_retry_time = 0;
+	record->current_retry_delay = 0;
 
 	if (mode == REG_DB_LOAD_RECORD) {
 		coords->extra = (void*)(unsigned long)uac->hash_code;

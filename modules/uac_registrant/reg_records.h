@@ -96,6 +96,8 @@ typedef struct reg_record {
 	str proxy_uri; // Proxy URI
 	int cluster_id;
 	int failed_attempts; // Counter for failed attempts since last reload - sagar
+	time_t next_retry_time; // Next retry time for exponential backoff
+	unsigned int current_retry_delay; // Current retry delay in seconds
 	unsigned int flags;
 	struct reg_record *prev;
 	struct reg_record *next;
