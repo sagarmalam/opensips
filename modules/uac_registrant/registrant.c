@@ -122,6 +122,12 @@ unsigned int reg_hsize = 1;
 unsigned int run_db_custom_updates = 0;
 unsigned int enable_custom_user_agent = 0;
 unsigned int auto_disable_on_failure = 0;
+/* When enabled, a 503/408 final reply clears the pinned destination
+ * (forced_to_su) so the next REGISTER re-resolves the FQDN/SRV and can
+ * fail over to another server. A timeout/no-response (FAKED_REPLY) always
+ * clears the pin regardless of this flag. Disabled by default to preserve
+ * the "keep re-registering on the same server for FQDNs" behavior. */
+unsigned int enable_failover = 0;
 
 static str db_url = {NULL, 0};
 
@@ -154,6 +160,7 @@ static const param_export_t params[]= {
 	{"hash_size",		INT_PARAM,			&reg_hsize},
 	{"run_db_custom_updates",		INT_PARAM,			&run_db_custom_updates},
 	{"auto_disable_on_failure",	INT_PARAM,			&auto_disable_on_failure},
+	{"enable_failover",	INT_PARAM,			&enable_failover},
 	{"default_expires",	INT_PARAM,			&default_expires},
 	{"timer_interval",	INT_PARAM,			&timer_interval},
 	{"enable_clustering",	INT_PARAM,			&enable_clustering},
@@ -402,9 +409,16 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 
 	reg_print_record(rec);
 
+	/* Clear the pinned destination so the next REGISTER re-resolves the
+	 * FQDN/SRV and can fail over to another server:
+	 *   - always on FAKED_REPLY (timeout / no response), and
+	 *   - on a 503 or 408 final reply when failover is enabled.
+	 * Otherwise, pin the destination that was just used (FQDN stickiness). 
+	 * Changes For SRV Failover
+	 * TRAG-15815*/
 	if (ps->rpl==FAKED_REPLY)
 		memset(&rec->td.forced_to_su, 0, sizeof(union sockaddr_union));
-	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC)
+	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC || (enable_failover && (t->uac[0].last_received == 503 || t->uac[0].last_received == 408)))
 		rec->td.forced_to_su = t->uac[0].request.dst.to;
 
 	statuscode = ps->code;
@@ -1073,7 +1087,7 @@ int run_timer_check(void *e_data, void *data, void *r_data)
 
 	if (!ureg_cluster_shtag_is_active( &rec->cluster_shtag, rec->cluster_id))
 		return 0;
-
+	/* TRAG-15021 */
 	if (auto_disable_on_failure && !(rec->flags & REG_ENABLED) &&
 		(rec->state == WRONG_CREDENTIALS_STATE ||
 		 rec->state == REGISTRAR_ERROR_STATE)) {

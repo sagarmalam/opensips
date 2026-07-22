@@ -532,7 +532,7 @@ int reg_update_db_state(reg_record_t *rec)
 			VAL_STR(&key_vals[1]) = rec->third_party_registrant;
 			VAL_STR(&key_vals[2]) = rec->third_party_registrant;
 
-			/* Auto-disable on failure: reset error states to waiting state */
+			/* TRAG-15021 Auto-disable on failure: reset error states to waiting state */
 			if (auto_disable_on_failure && 
 				(rec->state == WRONG_CREDENTIALS_STATE || rec->state == REGISTRAR_ERROR_STATE)) {
 				rec->flags &= ~REG_ENABLED;
