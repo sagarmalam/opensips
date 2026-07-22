@@ -38,10 +38,13 @@
 #include "../../parser/parse_expires.h"
 #include "../uac_auth/uac_auth.h"
 #include "../../lib/digest_auth/digest_auth.h"
+#include "../../globals.h"
 #include "reg_records.h"
 #include "reg_db_handler.h"
 #include "clustering.h"
 
+/* Function declarations */
+static int extract_identifier(const str *uri, str *identifier);
 
 #define UAC_REGISTRAR_URI_PARAM              1
 #define UAC_PROXY_URI_PARAM                  2
@@ -65,6 +68,7 @@
 #define UAC_REG_REGISTRAR_ERROR_STATE   "REGISTRAR_ERROR_STATE"
 #define UAC_REG_UNREGISTERING_STATE		"UNREGISTERING_STATE"
 #define UAC_REG_AUTHENTICATING_UNREGISTER_STATE	"AUTHENTICATING_UNREGISTER_STATE"
+#define UAC_REG_UNREGISTERED_STATE	"UNREGISTERED_STATE"
 
 const str uac_reg_state[]={
 	str_init(UAC_REG_NOT_REGISTERED_STATE),
@@ -77,6 +81,7 @@ const str uac_reg_state[]={
 	str_init(UAC_REG_REGISTRAR_ERROR_STATE),
 	str_init(UAC_REG_UNREGISTERING_STATE),
 	str_init(UAC_REG_AUTHENTICATING_UNREGISTER_STATE),
+	str_init(UAC_REG_UNREGISTERED_STATE),
 };
 
 /** Functions declarations */
@@ -114,6 +119,15 @@ unsigned int timer_interval = 100;
 
 reg_table_t reg_htable = NULL;
 unsigned int reg_hsize = 1;
+unsigned int run_db_custom_updates = 0;
+unsigned int enable_custom_user_agent = 0;
+unsigned int auto_disable_on_failure = 0;
+/* When enabled, a 503/408 final reply clears the pinned destination
+ * (forced_to_su) so the next REGISTER re-resolves the FQDN/SRV and can
+ * fail over to another server. A timeout/no-response (FAKED_REPLY) always
+ * clears the pin regardless of this flag. Disabled by default to preserve
+ * the "keep re-registering on the same server for FQDNs" behavior. */
+unsigned int enable_failover = 0;
 
 static str db_url = {NULL, 0};
 
@@ -121,9 +135,15 @@ static str register_method = str_init("REGISTER");
 static str contact_hdr = str_init("Contact: ");
 static str expires_hdr = str_init("Expires: ");
 static str expires_param = str_init(";expires=");
+static str user_agent_hdr = str_init("User-Agent: ");
+static str true_test = str_init("true");
+static str false_test = str_init("false");
 
-char extra_hdrs_buf[512];
-static str extra_hdrs={extra_hdrs_buf, 512};
+char extra_hdrs_buf[1024];
+static str extra_hdrs={extra_hdrs_buf, 1024};
+
+static char custom_ua_buf[512];
+static str custom_ua_hdr = {custom_ua_buf, 0};
 
 
 /* TM bind */
@@ -138,6 +158,9 @@ typedef struct reg_tm_cb {
 /** Exported parameters */
 static const param_export_t params[]= {
 	{"hash_size",		INT_PARAM,			&reg_hsize},
+	{"run_db_custom_updates",		INT_PARAM,			&run_db_custom_updates},
+	{"auto_disable_on_failure",	INT_PARAM,			&auto_disable_on_failure},
+	{"enable_failover",	INT_PARAM,			&enable_failover},
 	{"default_expires",	INT_PARAM,			&default_expires},
 	{"timer_interval",	INT_PARAM,			&timer_interval},
 	{"enable_clustering",	INT_PARAM,			&enable_clustering},
@@ -155,6 +178,8 @@ static const param_export_t params[]= {
 	{"forced_socket_column",	STR_PARAM,	&forced_socket_column.s},
 	{"cluster_shtag_column",	STR_PARAM,	&cluster_shtag_column.s},
 	{"state_column",	STR_PARAM,		&state_column.s},
+	{"user_agent_column",	STR_PARAM,	&user_agent_column.s},
+	{"enable_custom_user_agent",	INT_PARAM,	&enable_custom_user_agent},
 	{0,0,0}
 };
 
@@ -384,14 +409,28 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 
 	reg_print_record(rec);
 
+	/* Clear the pinned destination so the next REGISTER re-resolves the
+	 * FQDN/SRV and can fail over to another server:
+	 *   - always on FAKED_REPLY (timeout / no response), and
+	 *   - on a 503 or 408 final reply when failover is enabled.
+	 * Otherwise, pin the destination that was just used (FQDN stickiness). 
+	 * Changes For SRV Failover
+	 * TRAG-15815*/
 	if (ps->rpl==FAKED_REPLY)
 		memset(&rec->td.forced_to_su, 0, sizeof(union sockaddr_union));
-	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC)
+	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC || (enable_failover && (t->uac[0].last_received == 503 || t->uac[0].last_received == 408)))
 		rec->td.forced_to_su = t->uac[0].request.dst.to;
 
 	statuscode = ps->code;
 	switch(statuscode) {
 	case 200:
+		if(rec->td.send_sock ){
+       			LM_DBG("Local Port used to send register request =[%d]\n", rec->td.send_sock->last_local_real_port);
+			rec->local_src_port=rec->td.send_sock->last_local_real_port;
+		} else {
+			LM_DBG("rec or rec->td.send_sock does not existing. So cannot set local port\n");
+			rec->local_src_port=0;
+		}
 		msg = ps->rpl;
 		if(msg==FAKED_REPLY) {
 			LM_ERR("FAKED_REPLY\n");
@@ -401,6 +440,30 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 			LM_ERR("failed to parse headers\n");
 			goto done;
 		}
+	// ******* Changes made for registrant- invalid  reasons with 'ok' response ****
+		str*  msg_rep_reason =&msg->first_line.u.reply.reason;
+//      LM_DBG(" Reply-reason:%s\n",msg_rep_reason->s);
+		if(strncasecmp(msg_rep_reason->s,"ok",msg_rep_reason->len)!=0)
+		{
+				if(strncasecmp(msg_rep_reason->s,"authorization failure",msg_rep_reason->len)==0)
+				{
+						rec->state = WRONG_CREDENTIALS_STATE;
+						LM_WARN(" State changed to WRONG_CREDENTIALS due to :%s\n",msg_rep_reason->s);
+				}
+				else
+				{
+						rec->state = UNREGISTERED_STATE;
+						LM_WARN(" State Changed  to UNREGISTERED due to :%s\n",msg_rep_reason->s);
+				}
+				break;
+		}
+		//*************
+
+	if(rec->expires==0){
+		rec->state = UNREGISTERED_STATE;
+		break;
+	}
+				
 		if (msg->contact) {
 			c_ptr = msg->contact;
 			while(c_ptr) {
@@ -439,12 +502,14 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 
 				break;
 			default:
-				LM_ERR("No contact header in received 200ok in state [%d]\n",
+				LM_ERR("No contact header in received 200ok in state [%d] So we will not extract expires from contact header\n",
 					rec->state);
-				goto done;
+				goto setexpires;
 			}
 			break; /* done with 200ok handling */
 		}
+			
+				
 
 		if (rec->flags&FORCE_SINGLE_REGISTRATION &&
 			(rec->state == REGISTERING_STATE ||
@@ -478,15 +543,40 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 				break;
 			}
 		}
+			
+		if(strncmp(rec->server_expiry.s,"false",rec->server_expiry.len)==0){
+			LM_ERR("We will not respect expires from server side because it is disabled for aor [%.*s] ",rec->td.rem_uri.len, rec->td.rem_uri.s);
+			goto setexpires;
+		}
 
 		head_contact = msg->contact;
 		contact = ((contact_body_t*)msg->contact->parsed)->contacts;
 		while (contact) {
-			/* Check for binding */
-			if (contact->uri.len==rec->contact_uri.len &&
-				strncmp(contact->uri.s,rec->contact_uri.s,contact->uri.len)==0){
+			/* Check both full URI match and identifier match */
+			str contact_id = {0}, rec_id = {0};
+			int id_match = 0;
+			
+			/* First try exact match */
+			if (contact->uri.len == rec->contact_uri.len &&
+				contact->uri.s && rec->contact_uri.s &&
+				strncmp(contact->uri.s, rec->contact_uri.s, contact->uri.len) == 0) {
+				id_match = 1;
+			} else {
+				/* Try to match by identifier */
+				if (extract_identifier(&contact->uri, &contact_id) == 0 &&
+					extract_identifier(&rec->contact_uri, &rec_id) == 0 &&
+					contact_id.s && rec_id.s) {
+					if (contact_id.len == rec_id.len &&
+						contact_id.len > 0 &&
+						strncmp(contact_id.s, rec_id.s, contact_id.len) == 0) {
+						id_match = 1;
+					}
+				}
+			}
+			
+			if (id_match) {
 				if (contact->expires && contact->expires->body.len) {
-					if (str2int(&contact->expires->body, &exp)<0) {
+					if (str2int(&contact->expires->body, &exp) < 0) {
 						LM_ERR("Unable to extract expires from [%.*s]"
 							" for binding [%.*s]\n",
 							contact->expires->body.len,
@@ -513,6 +603,7 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 				contact = contact->next;
 			}
 		}
+		setexpires:
 		// if there is no expires in contact, try parse expires from header
 		if (exp == 0 && msg->expires) {
 			if (parse_expires(msg->expires) < 0) {
@@ -570,7 +661,6 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 		}
 
 		break;
-
 	case WWW_AUTH_CODE:
 	case PROXY_AUTH_CODE:
 		msg = ps->rpl;
@@ -685,7 +775,12 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 			goto done;
 		}
 		if (0 == parse_min_expires(msg)) {
-			rec->expires = (unsigned int)(long)msg->min_expires->parsed;
+			if(msg && msg->min_expires && msg->min_expires->parsed){
+				rec->expires = (unsigned int)(long)msg->min_expires->parsed;
+			} else {
+				rec->expires = 3600;
+				LM_ERR("Got 423 but No Min Expires header\n");
+			}
 			if(send_register(cb_param->hash_index, rec, NULL)==1)
 				rec->state = REGISTERING_STATE;
 			else
@@ -712,12 +807,17 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 
 		}
 	}
-
+	if(run_db_custom_updates){
+		reg_update_db_state(rec);
+	}
 	/* action successfully completed on current list element */
 	return 1; /* exit list traversal */
 done:
 	rec->state = INTERNAL_ERROR_STATE;
 	rec->registration_timeout = now + rec->expires;
+	if(run_db_custom_updates){
+		reg_update_db_state(rec);
+	}	
 	return -1; /* exit list traversal */
 }
 
@@ -822,6 +922,20 @@ int send_register(unsigned int hash_index, reg_record_t *rec, str *auth_hdr)
 	LM_DBG("extra_hdrs=[%p][%d]->[%.*s]\n",
 		extra_hdrs.s, extra_hdrs.len, extra_hdrs.len, extra_hdrs.s);
 
+	/* Temporarily swap global User-Agent if per-registrant value is set */
+	str saved_ua = {NULL, 0};
+	int ua_swapped = 0;
+	if (rec->user_agent.s && rec->user_agent.len) {
+		saved_ua = *user_agent_header;
+		memcpy(custom_ua_buf, user_agent_hdr.s, user_agent_hdr.len);
+		memcpy(custom_ua_buf + user_agent_hdr.len, rec->user_agent.s,
+			rec->user_agent.len);
+		custom_ua_hdr.len = user_agent_hdr.len + rec->user_agent.len;
+		user_agent_header->s = custom_ua_hdr.s;
+		user_agent_header->len = custom_ua_hdr.len;
+		ua_swapped = 1;
+	}
+
 	if ( !push_new_global_context() ) {
 
 		LM_ERR("failed to alloc new ctx in pkg\n");
@@ -845,6 +959,12 @@ int send_register(unsigned int hash_index, reg_record_t *rec, str *auth_hdr)
 		pop_pushed_global_context();
 	}
 
+	/* Restore original User-Agent */
+	if (ua_swapped) {
+		user_agent_header->s = saved_ua.s;
+		user_agent_header->len = saved_ua.len;
+	}
+
 	if (result < 1)
 		shm_free(cb_param);
 
@@ -855,9 +975,9 @@ int send_register(unsigned int hash_index, reg_record_t *rec, str *auth_hdr)
 int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
 	unsigned int all_contacts)
 {
-	int result;
+	int result,expires_len;
 	reg_tm_cb_t *cb_param;
-	char *p;
+	char *p,*expires;
 
 	/* Allocate space for tm callback params */
 	cb_param = shm_malloc(sizeof(reg_tm_cb_t));
@@ -867,32 +987,44 @@ int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
 	}
 	cb_param->hash_index = hash_index;
 	cb_param->uac = rec;
-
+	/*There are custom changes in this section which we are not overwriting in 3.4.main*/
+    /* get the string version of expires */
+	expires = int2str((unsigned long)(rec->expires), &expires_len);
 	p = extra_hdrs.s;
 	memcpy(p, contact_hdr.s, contact_hdr.len);
 	p += contact_hdr.len;
-	if (all_contacts) {
-		*p = '*'; p++;
-		memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;
-
-		/* adding exires header */
-		memcpy(p, expires_hdr.s, expires_hdr.len);
-		p += expires_hdr.len;
-		*p = '0'; p++;
-		memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;
-	} else {
-		*p = '<'; p++;
-		memcpy(p, rec->contact_uri.s, rec->contact_uri.len);
-		p += rec->contact_uri.len;
-		*p = '>'; p++;
-		memcpy(p, rec->contact_params.s, rec->contact_params.len);
-		p += rec->contact_params.len;
+	/**p = '*'; p++;
+	memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;*/
+	*p = '<'; p++;
+	memcpy(p, rec->contact_uri.s, rec->contact_uri.len);
+	p += rec->contact_uri.len;
+	*p = '>'; p++;
+	memcpy(p, rec->contact_params.s, rec->contact_params.len);
+	p += rec->contact_params.len;
+	if (1) {
 		/* adding exiration time as a parameter */
 		memcpy(p, expires_param.s, expires_param.len);
 		p += expires_param.len;
-		*p = '0'; p++;
+	} else {
+		/* adding exiration time as a header */
 		memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;
+		memcpy(p, expires_hdr.s, expires_hdr.len);
+		p += expires_hdr.len;
 	}
+	//Hardcoding expires to 0 for unregister packet. These chnages were not there in 3.1 version but added as custom in 3.4
+	// memcpy(p, expires, expires_len);
+	// p += expires_len;
+	memcpy(p, "0", 1); 
+        p++;
+	////////////////////////////////////////////
+	memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;
+	/* adding exires header */
+	memcpy(p, expires_hdr.s, expires_hdr.len);
+	p += expires_hdr.len;
+	memcpy(p, "0", 1);
+        p++;
+	memcpy(p, CRLF, CRLF_LEN); p += CRLF_LEN;
+	/*There are custom changes in this section which we are not overwriting in 3.4.main*/
 
 	if (auth_hdr) {
 		memcpy(p, auth_hdr->s, auth_hdr->len);
@@ -903,6 +1035,20 @@ int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
 	LM_DBG("extra_hdrs=[%p][%d]->[%.*s]\n",
 		extra_hdrs.s, extra_hdrs.len, extra_hdrs.len, extra_hdrs.s);
 
+	/* Temporarily swap global User-Agent if per-registrant value is set */
+	str saved_ua = {NULL, 0};
+	int ua_swapped = 0;
+	if (rec->user_agent.s && rec->user_agent.len) {
+		saved_ua = *user_agent_header;
+		memcpy(custom_ua_buf, user_agent_hdr.s, user_agent_hdr.len);
+		memcpy(custom_ua_buf + user_agent_hdr.len, rec->user_agent.s,
+			rec->user_agent.len);
+		custom_ua_hdr.len = user_agent_hdr.len + rec->user_agent.len;
+		user_agent_header->s = custom_ua_hdr.s;
+		user_agent_header->len = custom_ua_hdr.len;
+		ua_swapped = 1;
+	}
+
 	result=tmb.t_request_within(
 		&register_method,	/* method */
 		&extra_hdrs,		/* extra headers*/
@@ -911,6 +1057,12 @@ int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
 		reg_tm_cback,		/* callback function */
 		(void *)cb_param,	/* callback param */
 		osips_shm_free);	/* function to release the parameter */
+
+	/* Restore original User-Agent */
+	if (ua_swapped) {
+		user_agent_header->s = saved_ua.s;
+		user_agent_header->len = saved_ua.len;
+	}
 
 	if (result < 1)
 		shm_free(cb_param);
@@ -935,10 +1087,18 @@ int run_timer_check(void *e_data, void *data, void *r_data)
 
 	if (!ureg_cluster_shtag_is_active( &rec->cluster_shtag, rec->cluster_id))
 		return 0;
+	/* TRAG-15021 */
+	if (auto_disable_on_failure && !(rec->flags & REG_ENABLED) &&
+		(rec->state == WRONG_CREDENTIALS_STATE ||
+		 rec->state == REGISTRAR_ERROR_STATE)) {
+		return 0;
+	}
 
 	switch(rec->state){
 	case REGISTERING_STATE:
 	case UNREGISTERING_STATE:
+	case UNREGISTERED_STATE:
+		break;
 	case AUTHENTICATING_STATE:
 	case AUTHENTICATING_UNREGISTER_STATE:
 		break;
@@ -947,6 +1107,11 @@ int run_timer_check(void *e_data, void *data, void *r_data)
 	case INTERNAL_ERROR_STATE:
 	case REGISTRAR_ERROR_STATE:
 		reg_print_record(rec);
+		rec->failed_attempts++;
+		if(rec->failed_attempts > 4){
+			LM_ERR("Max failed attempts exceeded for rec [%p]\n", rec);
+			break;
+		}
 		if (rec->flags&REG_ENABLED) {
 			new_call_id_ftag_4_record(rec, s_now);
 			if(send_register(i, rec, NULL)==1) {
@@ -970,6 +1135,14 @@ int run_timer_check(void *e_data, void *data, void *r_data)
 			break;
 		}
 	case NOT_REGISTERED_STATE:
+		rec->failed_attempts=0;
+		if(rec->expires==0){
+			if(send_unregister(i, rec, NULL,0)==1) {
+				rec->state = UNREGISTERING_STATE;
+			} else {
+				rec->state = INTERNAL_ERROR_STATE;
+			}
+		}else{
 		if (rec->flags&REG_ENABLED) {
 			if(send_register(i, rec, NULL)==1) {
 				rec->last_register_sent = now;
@@ -978,6 +1151,7 @@ int run_timer_check(void *e_data, void *data, void *r_data)
 				rec->registration_timeout = now + rec->expires - timer_interval;
 				rec->state = INTERNAL_ERROR_STATE;
 			}
+		}
 		}
 		break;
 	default:
@@ -1130,10 +1304,10 @@ int run_mi_reg_list(void *e_data, void *data, void *r_data)
 		if (add_mi_string(record_item, MI_SSTR("binding_params"),
 			rec->contact_params.s, rec->contact_params.len) < 0)
 			goto error;
-
-	if(rec->td.loc_uri.s != rec->td.rem_uri.s)
+	//Always print third party registrant value 
+	if(rec->third_party_registrant.s && rec->third_party_registrant.len)
 		if (add_mi_string(record_item, MI_SSTR("third_party_registrant"),
-			rec->td.loc_uri.s, rec->td.loc_uri.len) < 0)
+			rec->third_party_registrant.s, rec->third_party_registrant.len) < 0)
 			goto error;
 
 	if (rec->td.obp.s && rec->td.obp.len)
@@ -1143,6 +1317,10 @@ int run_mi_reg_list(void *e_data, void *data, void *r_data)
 
 	switch(rec->td.forced_to_su.s.sa_family) {
 	case AF_UNSPEC:
+		if(rec->dest_ip.s){
+			if (add_mi_string(record_item, MI_SSTR("ip"), rec->dest_ip.s,rec->dest_ip.len) < 0)
+			goto error;
+		}
 		break;
 	case AF_INET:
 	case AF_INET6:
@@ -1153,6 +1331,8 @@ int run_mi_reg_list(void *e_data, void *data, void *r_data)
 		p = ip_addr2a(&addr);
 		if (p == NULL) goto error;
 		len = strlen(p);
+		rec->dest_ip.s=p;
+		rec->dest_ip.len=len;
 		if (add_mi_string(record_item, MI_SSTR("ip"), p, len) < 0)
 			goto error;
 		break;
@@ -1173,6 +1353,13 @@ int run_mi_reg_list(void *e_data, void *data, void *r_data)
 		if (add_mi_number(record_item, MI_SSTR("cluster_id"), rec->cluster_id) < 0)
 			goto error;
 		}
+	if (add_mi_number(record_item, MI_SSTR("local_port"), rec->local_src_port) < 0)
+		goto error;
+
+	if (rec->user_agent.s && rec->user_agent.len)
+		if (add_mi_string(record_item, MI_SSTR("user_agent"),
+			rec->user_agent.s, rec->user_agent.len) < 0)
+			goto error;
 
 	/* action successfully completed on current list element */
 	return 0; /* continue list traversal */
@@ -1222,8 +1409,9 @@ int run_mi_reg_list_record(void *e_data, void *data, void *r_data)
 	reg_record_t *rec = (reg_record_t*)e_data;
 	record_coords_t *coords = (record_coords_t *)data;
 
-	if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
-		!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
+	// if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
+	// 	!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
+	if (!str_strcmp(&coords->contact, &rec->third_party_registrant)) {
 		return run_mi_reg_list(rec, coords->extra, NULL) ? -1 : 1;
 	} else
 		return 0;  /* continue search */
@@ -1290,8 +1478,8 @@ int run_compare_rec(void *e_data, void *data, void *r_data)
 	reg_record_t *old_rec = (reg_record_t*)e_data;
 	reg_record_t *new_rec = (reg_record_t*)data;
 
-	if ((old_rec->state == REGISTERED_STATE) &&
-	    (str_strcmp(&old_rec->td.rem_uri, &new_rec->td.rem_uri) == 0)) {
+	if (((old_rec->state == REGISTERED_STATE) || (old_rec->state == UNREGISTERED_STATE)) &&
+	    (str_strcmp(&old_rec->td.rem_uri, &new_rec->td.rem_uri) == 0) && (str_strcmp(&old_rec->contact_uri, &new_rec->contact_uri) == 0) && (str_strcmp(&old_rec->proxy_uri, &new_rec->proxy_uri) == 0) && (str_strcmp(&old_rec->server_expiry, &new_rec->server_expiry) == 0)) {
 		memcpy(new_rec->td.id.call_id.s, old_rec->td.id.call_id.s,
 		    new_rec->td.id.call_id.len);
 		memcpy(new_rec->td.id.loc_tag.s, old_rec->td.id.loc_tag.s,
@@ -1299,7 +1487,37 @@ int run_compare_rec(void *e_data, void *data, void *r_data)
 		new_rec->td.loc_seq.value = old_rec->td.loc_seq.value;
 		new_rec->last_register_sent = old_rec->last_register_sent;
 		new_rec->registration_timeout = old_rec->registration_timeout;
-		new_rec->state = old_rec->state;
+		memcpy(new_rec->dest_ip.s, old_rec->dest_ip.s,
+		    new_rec->dest_ip.len);
+		new_rec->dest_ip = old_rec->dest_ip;
+		new_rec->local_src_port = old_rec->local_src_port;
+		new_rec->td.forced_to_su=old_rec->td.forced_to_su;
+		LM_DBG("Inside run compare rec function\n Old Expires=%d , New Expires=%d \n Old Server Expiry= [%.*s] , New Server Expiry=[%.*s]",old_rec->expires,new_rec->expires,old_rec->server_expiry.len,old_rec->server_expiry.s,new_rec->server_expiry.len,new_rec->server_expiry.s);
+		
+		if (old_rec->state == REGISTERED_STATE){
+
+			if(str_strcmp(&new_rec->server_expiry,&false_test) == 0 && new_rec->expires!=old_rec->expires){
+				LM_DBG("In false test");
+				new_rec->state = NOT_REGISTERED_STATE;
+				new_rec->registration_timeout = old_rec->last_register_sent;
+			} else if(str_strcmp(&new_rec->server_expiry,&true_test) == 0 && new_rec->expires==0) {
+				LM_DBG("In True Test");
+				new_rec->state = NOT_REGISTERED_STATE;
+				new_rec->registration_timeout = old_rec->last_register_sent;
+			} else {
+				new_rec->state = old_rec->state;
+
+			}
+		} else {
+			if(new_rec->expires!=0) {
+				new_rec->state = NOT_REGISTERED_STATE;
+				new_rec->registration_timeout = old_rec->last_register_sent;
+			} else {
+				new_rec->state = old_rec->state;
+			}
+
+		}
+		new_rec->failed_attempts=0; //In case of reg reload, reset failed attempts
 	}
 	return 0;
 }
@@ -1391,8 +1609,9 @@ int run_mi_reg_enable(void *e_data, void *data, void *r_data)
 	str str_now = {NULL, 0};
 	time_t now;
 
-	if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
-		!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
+	// if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
+	// 	!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
+	if (!str_strcmp(&coords->contact, &rec->third_party_registrant)) {
 		if (!(rec->flags&REG_ENABLED)) {
 			if (rec->state == NOT_REGISTERED_STATE) {
 				now = time(0);
@@ -1409,6 +1628,16 @@ int run_mi_reg_enable(void *e_data, void *data, void *r_data)
 					rec->registration_timeout = now + rec->expires - timer_interval;
 					rec->state = INTERNAL_ERROR_STATE;
 				}
+			} else if (rec->state != AUTHENTICATING_STATE && rec->state != REGISTERING_STATE && rec->state != AUTHENTICATING_UNREGISTER_STATE && rec->state != UNREGISTERING_STATE) {
+				if(send_register((unsigned long)coords->extra, rec, NULL)==1) {
+					rec->last_register_sent = now;
+					rec->state = REGISTERING_STATE;
+				} else {
+					rec->registration_timeout = now + rec->expires - timer_interval;
+					rec->state = INTERNAL_ERROR_STATE;
+				}
+			} else {
+				LM_ERR("Invalid state for reg enable\n");
 			}
 
 			rec->flags |= REG_ENABLED;
@@ -1426,8 +1655,7 @@ int run_mi_reg_disable(void *e_data, void *data, void *r_data)
 	reg_record_t *rec = (reg_record_t*)e_data;
 	record_coords_t *coords = (record_coords_t *)data;
 
-	if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
-		!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
+	if (!str_strcmp(&coords->contact, &rec->third_party_registrant)) {
 		if (rec->flags&REG_ENABLED) {
 			if (rec->state == REGISTERED_STATE) {
 				if(send_unregister((unsigned long)coords->extra, rec, NULL, 0)==1)
@@ -1498,4 +1726,50 @@ static mi_response_t *mi_reg_disable(const mi_params_t *params,
 		return init_mi_error(404, MI_SSTR("No such registrant"));
 
 	return init_mi_result_ok();
+}
+
+/* Helper function to extract identifier from URI */
+static int extract_identifier(const str *uri, str *identifier) {
+    char *start, *end;
+    size_t remaining_len;
+    
+    if (!uri || !uri->s || !uri->len) {
+        return -1;
+    }
+    
+    if (!identifier) {
+        return -1;
+    }
+    
+    /* Initialize identifier to empty */
+    identifier->s = NULL;
+    identifier->len = 0;
+    
+    /* Find the start of the identifier (after sip:) */
+    start = memchr(uri->s, ':', uri->len);
+    if (!start) {
+        return -1;
+    }
+    
+    /* Calculate remaining length after ':' */
+    remaining_len = uri->s + uri->len - start;
+    if (remaining_len <= 1) { /* Check if we have any characters after ':' */
+        return -1;
+    }
+    start++; /* Skip the ':' */
+    
+    /* Find the end of the identifier (before @) */
+    end = memchr(start, '@', remaining_len - 1);
+    if (!end) {
+        return -1;
+    }
+    
+    /* Verify the extracted length is valid */
+    if (end <= start) {
+        return -1;
+    }
+    
+    identifier->s = start;
+    identifier->len = end - start;
+    return 0;
 }
