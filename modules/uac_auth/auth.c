@@ -271,8 +271,8 @@ int do_uac_auth(str *msg_body, str *method, str *uri, struct uac_credential *crd
 
 	if((auth->flags&QOP_AUTH) || (auth->flags&QOP_AUTH_INT))
 	{
-		/* if qop generate nonce-count and cnonce */
-		nc = str_const_init("00000001");
+		/* if qop generate nonce-count and cnonce; honor caller-supplied nc */
+		nc = auth_nc_cnonce->nc.len ? auth_nc_cnonce->nc : str_const_init("00000001");
 		cnonce.s = int2str(core_hash(&auth->nonce, NULL, 0),&cnonce.len);
 
 		/* do authentication */

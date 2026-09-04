@@ -128,6 +128,11 @@ unsigned int auto_disable_on_failure = 0;
  * clears the pin regardless of this flag. Disabled by default to preserve
  * the "keep re-registering on the same server for FQDNs" behavior. */
 unsigned int enable_failover = 0;
+/* When enabled, if a challenge reuses the same nonce as the previous one,
+ * increment the nonce-count (nc) instead of always sending nc=00000001.
+ * Needed for registrars that keep a nonce alive and reject replayed nc.
+ * Disabled by default to preserve existing behavior. */
+unsigned int enable_nc_increment = 0;
 
 static str db_url = {NULL, 0};
 
@@ -180,6 +185,7 @@ static const param_export_t params[]= {
 	{"state_column",	STR_PARAM,		&state_column.s},
 	{"user_agent_column",	STR_PARAM,	&user_agent_column.s},
 	{"enable_custom_user_agent",	INT_PARAM,	&enable_custom_user_agent},
+	{"enable_nc_increment",	INT_PARAM,	&enable_nc_increment},
 	{0,0,0}
 };
 
@@ -733,6 +739,22 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 		}
 
 		memset(&auth_nc_cnonce, 0, sizeof(struct authenticate_nc_cnonce));
+		/* nc-increment: on same nonce, bump nc instead of always sending 1 */
+		if (enable_nc_increment &&
+		    ((auth->flags&QOP_AUTH) || (auth->flags&QOP_AUTH_INT)) &&
+		    auth->nonce.len && auth->nonce.len <= sizeof(rec->last_nonce)) {
+			if (rec->last_nonce_len == auth->nonce.len &&
+			    memcmp(rec->last_nonce, auth->nonce.s, auth->nonce.len)==0) {
+				rec->nc++;
+			} else {
+				rec->nc = 1;
+				memcpy(rec->last_nonce, auth->nonce.s, auth->nonce.len);
+				rec->last_nonce_len = auth->nonce.len;
+			}
+			snprintf(rec->nc_buf, sizeof(rec->nc_buf), "%08x", rec->nc);
+			auth_nc_cnonce.nc.s = rec->nc_buf;
+			auth_nc_cnonce.nc.len = 8;
+		}
 		if (uac_auth_api._do_uac_auth(&msg_body, &register_method,
 		    &rec->td.rem_target, &crd, auth, &auth_nc_cnonce, &response) != 0) {
 			LM_ERR("Failed in do_uac_auth()\n");
