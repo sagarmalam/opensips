@@ -213,6 +213,36 @@ modparam("uac_registrant", "enable_failover", 1)
 		</example>
 	</section>
 
+	<section id="param_enable_nc_increment" xreflabel="enable_nc_increment">
+		<title><varname>enable_nc_increment</varname> (integer)</title>
+		<para>
+		Controls the digest nonce-count (<emphasis>nc</emphasis>) sent in
+		authenticated REGISTERs when <emphasis>qop</emphasis> is in use. By
+		default the module always sends <emphasis>nc=00000001</emphasis>.
+		Some registrars keep the same nonce alive across challenges and reject
+		a reused nonce whose nc was not incremented (replay protection),
+		causing the registration to loop.
+		</para>
+		<para>
+		When enabled, if a challenge carries the same nonce as the previous
+		one for that registrant, the module increments nc instead of resetting
+		it to 1; a new nonce resets nc back to 1.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0 / off.
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>enable_nc_increment</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("uac_registrant", "enable_nc_increment", 1)
+...
+</programlisting>
+		</example>
+	</section>
+
 	<section id="param_db_url" xreflabel="db_url">
 		<title><varname>db_url</varname> (string)</title>
 		<para>
