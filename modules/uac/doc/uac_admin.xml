@@ -196,6 +196,36 @@ modparam("uac", "force_dialog", yes)
 				</programlisting>
 			</example>
 		</section>
+
+		<section id="param_enable_refresh_cnonce" xreflabel="enable_refresh_cnonce">
+			<title><varname>enable_refresh_cnonce</varname> (int)</title>
+			<para>
+				When answering a digest challenge with <emphasis>qop</emphasis>,
+				the client nonce (<emphasis>cnonce</emphasis>) is by default
+				derived deterministically from the server nonce. If a registrar
+				or proxy reuses the same nonce across requests and runs a digest
+				replay guard, the repeated identical digest can be rejected as a
+				replay attack.
+			</para>
+			<para>
+				When enabled, the cnonce is refreshed per authenticated request
+				by seeding it with the request's Call-ID and CSeq in addition to
+				the server nonce, producing a distinct digest each time. Uses
+				only local state; the nonce-count (<emphasis>nc</emphasis>)
+				semantics are unchanged.
+			</para>
+			<para>
+				Default value is 0 / off (legacy behavior preserved exactly).
+			</para>
+			<example>
+				<title>Set <varname>enable_refresh_cnonce</varname> parameter</title>
+				<programlisting format="linespecific">
+...
+modparam("uac", "enable_refresh_cnonce", 1)
+...
+				</programlisting>
+			</example>
+		</section>
 	</section>
 
 

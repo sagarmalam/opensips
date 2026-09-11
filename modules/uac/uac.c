@@ -76,6 +76,8 @@ struct tm_binds uac_tmb;
 struct rr_binds uac_rrb;
 uac_auth_api_t uac_auth_api;
 int force_dialog = 0;
+/* refresh cnonce per auth attempt (seeded with Call-ID+CSeq); off by default */
+int enable_refresh_cnonce = 0;
 struct dlg_binds dlg_api;
 
 static int w_replace_from(struct sip_msg* msg, str* p1, str* p2);
@@ -123,6 +125,7 @@ static const param_export_t params[] = {
 	{"restore_mode",        STR_PARAM,                &restore_mode_str      },
 	{"restore_passwd",      STR_PARAM,                &uac_passwd.s          },
 	{"force_dialog",        INT_PARAM,                &force_dialog          },
+	{"enable_refresh_cnonce", INT_PARAM,              &enable_refresh_cnonce },
 	{0, 0, 0}
 };
 
