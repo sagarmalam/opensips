@@ -39,6 +39,8 @@
 #include "../uac_auth/uac_auth.h"
 #include "../../lib/digest_auth/digest_auth.h"
 #include "../../globals.h"
+#include "../../hash_func.h"
+#include "../../ut.h"
 #include "reg_records.h"
 #include "reg_db_handler.h"
 #include "clustering.h"
@@ -128,6 +130,10 @@ unsigned int auto_disable_on_failure = 0;
  * clears the pin regardless of this flag. Disabled by default to preserve
  * the "keep re-registering on the same server for FQDNs" behavior. */
 unsigned int enable_failover = 0;
+/* Refresh cnonce per (re-)registration by seeding it with local Call-ID+CSeq,
+ * so the digest differs even when the registrar re-issues the same nonce
+ * (avoids false replay rejections). Off by default: legacy cnonce=hash(nonce). */
+unsigned int enable_refresh_cnonce = 0;
 
 static str db_url = {NULL, 0};
 
@@ -180,6 +186,7 @@ static const param_export_t params[]= {
 	{"state_column",	STR_PARAM,		&state_column.s},
 	{"user_agent_column",	STR_PARAM,	&user_agent_column.s},
 	{"enable_custom_user_agent",	INT_PARAM,	&enable_custom_user_agent},
+	{"enable_refresh_cnonce",	INT_PARAM,	&enable_refresh_cnonce},
 	{0,0,0}
 };
 
@@ -396,6 +403,8 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 	time_t now;
 	str str_now = {NULL, 0};
 	reg_tm_cb_t *cb_param;
+	/* refreshed cnonce storage; must outlive _do_uac_auth + _build_authorization_hdr */
+	char cnonce_buf[INT2STR_MAX_LEN];
 
 	cb_param = tm_cback_data->cb_param;
 	if (rec!=cb_param->uac) {
@@ -733,6 +742,16 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 		}
 
 		memset(&auth_nc_cnonce, 0, sizeof(struct authenticate_nc_cnonce));
+		if (enable_refresh_cnonce) {
+			/* seed cnonce with Call-ID+CSeq -> unique per REGISTER */
+			unsigned int h;
+			int cn_len = 0;
+
+			h = core_hash(&auth->nonce, &rec->td.id.call_id, 0)
+				^ rec->td.loc_seq.value;
+			auth_nc_cnonce.in_cnonce.s = int2bstr(h, cnonce_buf, &cn_len);
+			auth_nc_cnonce.in_cnonce.len = cn_len;
+		}
 		if (uac_auth_api._do_uac_auth(&msg_body, &register_method,
 		    &rec->td.rem_target, &crd, auth, &auth_nc_cnonce, &response) != 0) {
 			LM_ERR("Failed in do_uac_auth()\n");

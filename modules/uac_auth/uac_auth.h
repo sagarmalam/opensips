@@ -41,6 +41,9 @@ struct uac_credential {
 struct authenticate_nc_cnonce {
 	str_const nc;
 	str_const cnonce;
+	/* optional caller-supplied cnonce (input); do_uac_auth uses it if set,
+	 * never writes it. Zeroed by default -> legacy hash(nonce) behavior. */
+	str_const in_cnonce;
 };
 
 

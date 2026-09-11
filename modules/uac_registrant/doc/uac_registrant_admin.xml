@@ -213,6 +213,47 @@ modparam("uac_registrant", "enable_failover", 1)
 		</example>
 	</section>
 
+	<section id="param_enable_refresh_cnonce" xreflabel="enable_refresh_cnonce">
+		<title><varname>enable_refresh_cnonce</varname> (integer)</title>
+		<para>
+		Controls how the client nonce (<emphasis>cnonce</emphasis>) is
+		generated when answering a digest challenge with
+		<emphasis>qop</emphasis>. By default the cnonce is derived
+		deterministically from the server nonce, so as long as the registrar
+		keeps re-issuing the same nonce, every authenticated REGISTER carries
+		an identical <emphasis>Authorization</emphasis> digest.
+		</para>
+		<para>
+		Some registrars (e.g. innovaphone) reuse the same nonce across
+		registration cycles and run a digest replay guard; they then reject
+		the repeated identical digest with a
+		<emphasis>403 Forbidden - Digest replay attack detected</emphasis>.
+		</para>
+		<para>
+		When this parameter is enabled, the cnonce is refreshed on every
+		(re-)registration by seeding it with the registrant's local Call-ID
+		and CSeq in addition to the server nonce. The CSeq increments on every
+		REGISTER (and the Call-ID is fresh whenever the CSeq is reset), so each
+		cycle then produces a distinct cnonce and therefore a distinct response
+		digest, avoiding the false replay rejection. The generation uses only
+		local state - no wall-clock and no reply parsing. The nonce-count
+		(<emphasis>nc</emphasis>) semantics are unchanged.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0 / off (legacy behavior preserved exactly).
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>enable_refresh_cnonce</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("uac_registrant", "enable_refresh_cnonce", 1)
+...
+</programlisting>
+		</example>
+	</section>
+
 	<section id="param_db_url" xreflabel="db_url">
 		<title><varname>db_url</varname> (string)</title>
 		<para>
