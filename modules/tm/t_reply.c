@@ -100,6 +100,9 @@ int onreply_avp_mode = 0;
 /* disable the 6xx fork-blocking - default no (as per RFC3261) */
 int disable_6xx_block = 0;
 
+/* if set, fail over on any 5xx and only blacklist the failed IP on 5xx */
+int blacklist_5xx = 0;
+
 /* flag for marking minor branches */
 int minor_branch_flag = -1;
 char *minor_branch_flag_str = 0;
@@ -648,6 +651,13 @@ static inline int is_3263_failure(struct cell *t)
 		picked_branch, t->uac[picked_branch].last_received,
 		t->uac[picked_branch].flags);
 
+	/* blacklist_5xx: any genuinely received 5xx triggers DNS failover */
+	if (blacklist_5xx && t->uac[picked_branch].last_received>=500 &&
+	t->uac[picked_branch].last_received<600 &&
+	t->uac[picked_branch].reply!=NULL &&
+	t->uac[picked_branch].reply!=FAKED_REPLY)
+		return 1;
+
 	switch (t->uac[picked_branch].last_received) {
 		case 408:
 			return ((t->uac[picked_branch].flags&T_UAC_HAS_RECV_REPLY)==0);
@@ -673,12 +683,17 @@ static inline int do_dns_failover(struct cell *t)
 	struct sip_msg *req;
 	struct ua_client *uac;
 	dlg_t dialog;
-	int ret, sip_msg_len;
+	int ret, sip_msg_len, add_to_bl;
 
 	uac = &t->uac[picked_branch];
 
+	/* blacklist the failed IP, unless blacklist_5xx restricts it to 5xx
+	 * (so a timeout fails over without blacklisting) */
+	add_to_bl = (!blacklist_5xx ||
+		(uac->last_received>=500 && uac->last_received<600)) ? 1 : 0;
+
 	/* check if the DNS resolver can get at least one new IP */
-	if ( get_next_su( uac->proxy, &uac->request.dst.to, 1)!=0 )
+	if ( get_next_su( uac->proxy, &uac->request.dst.to, add_to_bl)!=0 )
 		return -1;
 
 	LM_DBG("new destination available\n");
