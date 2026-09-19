@@ -418,8 +418,13 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 	 * TRAG-15815*/
 	if (ps->rpl==FAKED_REPLY)
 		memset(&rec->td.forced_to_su, 0, sizeof(union sockaddr_union));
-	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC || (enable_failover && (t->uac[0].last_received == 503 || t->uac[0].last_received == 408)))
-		rec->td.forced_to_su = t->uac[0].request.dst.to;
+	else if (rec->td.forced_to_su.s.sa_family == AF_UNSPEC || (enable_failover && (t->uac[0].last_received == 503 || t->uac[0].last_received == 408))) {
+		/* pin the destination that failover actually concluded on: with
+		 * serial in-transaction DNS/SRV failover that is the last branch.
+		 * enable_failover off (or no branch) -> legacy uac[0] behavior. */
+		int _w = (enable_failover && t->nr_of_outgoings > 0) ? t->nr_of_outgoings - 1 : 0;
+		rec->td.forced_to_su = t->uac[_w].request.dst.to;
+	}
 
 	statuscode = ps->code;
 	switch(statuscode) {
