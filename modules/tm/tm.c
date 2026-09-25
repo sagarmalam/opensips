@@ -326,6 +326,8 @@ static const param_export_t params[]={
 		&onreply_avp_mode },
 	{ "disable_6xx_block",        INT_PARAM,
 		&disable_6xx_block },
+	{ "blacklist_5xx",            INT_PARAM,
+		&blacklist_5xx },
 	{ "minor_branch_flag",        STR_PARAM,
 		&minor_branch_flag_str },
 	{ "timer_partitions",         INT_PARAM,

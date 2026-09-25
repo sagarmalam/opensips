@@ -42,6 +42,12 @@ str expiry_column = str_init(EXPIRY_COL);
 str forced_socket_column = str_init(FORCED_SOCKET_COL);
 str cluster_shtag_column = str_init(CLUSTER_SHTAG_COL);
 str state_column = str_init(STATE_COL);
+str server_expiry_column = str_init(SERVER_EXPIRY_COL);
+str registration_status_column = str_init(REGISTRATION_STATUS_COL);
+str local_port_column = str_init(LOCAL_PORT_COL);
+str ip_column = str_init(IP_COL);
+str user_agent_column = str_init(USER_AGENT_COL);
+
 
 str reg_table_name = str_init(REG_TABLE_NAME);
 
@@ -89,9 +95,13 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 	unsigned int forced_socket_col;
 	unsigned int cluster_shtag_col;
 	unsigned int state_col;
+	unsigned int server_expiry_col;
+	unsigned int user_agent_col = 0;
+	int has_user_agent_col = 0;
+
 	db_key_t q_cols[REG_TABLE_TOTAL_COL_NO];
 	db_key_t key_cols[REG_KEY_COL_NO] =
-		{&aor_column, &binding_URI_column, &registrar_column};
+		{&aor_column, &third_party_registrant_column, &third_party_registrant_column};
 	db_val_t key_vals[REG_KEY_COL_NO];
 
 	char *p = NULL;
@@ -104,7 +114,8 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 	str _param_str = {NULL, 0};
 	int reg_id_found = 0;
 	int sip_instance_found = 0;
-	str forced_socket, s;
+	str forced_socket, host, s;
+	int port, proto;
 	uac_reg_map_t uac_param;
 
 	p = int2str((unsigned long)(time(0)), &len);
@@ -132,6 +143,11 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 	q_cols[forced_socket_col = n_result_cols++] = &forced_socket_column;
 	q_cols[cluster_shtag_col = n_result_cols++] = &cluster_shtag_column;
 	q_cols[state_col = n_result_cols++] = &state_column;
+	q_cols[server_expiry_col = n_result_cols++] = &server_expiry_column;
+	if (enable_custom_user_agent) {
+		q_cols[user_agent_col = n_result_cols++] = &user_agent_column;
+		has_user_agent_col = 1;
+	}
 
 	if (mode == REG_DB_LOAD_RECORD) {
 		key_vals[0].type = DB_STR;
@@ -146,7 +162,7 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 		VAL_STR(&key_vals[2]) = coords->registrar;
 
 		if(reg_dbf.query(reg_db_handle, key_cols, 0, key_vals, q_cols,
-			REG_KEY_COL_NO, REG_TABLE_TOTAL_COL_NO, 0, &res) < 0) {
+			REG_KEY_COL_NO, n_result_cols, 0, &res) < 0) {
 			LM_ERR("Error while querying database\n");
 			return -1;
 		}
@@ -154,7 +170,7 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 		/* select the whole tabel and all the columns */
 		if (DB_CAPABILITY(reg_dbf, DB_CAP_FETCH)) {
 			if(reg_dbf.query(reg_db_handle, 0, 0, 0, q_cols, 0,
-					REG_TABLE_TOTAL_COL_NO, 0, 0) < 0) {
+					n_result_cols, 0, 0) < 0) {
 				LM_ERR("Error while querying (fetch) database\n");
 				return -1;
 			}
@@ -164,7 +180,7 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 			}
 		} else {
 			if(reg_dbf.query(reg_db_handle, 0, 0, 0, q_cols, 0,
-					REG_TABLE_TOTAL_COL_NO, 0, &res) < 0) {
+					n_result_cols, 0, &res) < 0) {
 				LM_ERR("Error while querying database\n");
 				return -1;
 			}
@@ -355,13 +371,19 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 
 			/* Get the expiration param */
 			uac_param.expires = values[expiry_col].val.int_val;
-			if (uac_param.expires <= timer_interval) {
+			/*if (uac_param.expires <= timer_interval) {
 				LM_ERR("Please decrease timer_interval=[%u]"
 					" - requested expires=[%u] to small for AOR=[%.*s]\n",
 					timer_interval, uac_param.expires,
 					uac_param.to_uri.len, uac_param.to_uri.s);
 				continue;
-			}
+			}*/
+			/* Get the server expires column values */
+			uac_param.server_expiry.s =
+				(char*)values[server_expiry_col].val.string_val;
+			if (uac_param.server_expiry.s)
+				uac_param.server_expiry.len = strlen(uac_param.server_expiry.s);
+			if (uac_param.server_expiry.len == 0) uac_param.server_expiry.s = NULL;
 
 			/* Get the socket */
 			if (values[forced_socket_col].val.string_val) {
@@ -413,14 +435,23 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 				}
 			}
 
-			/* Get the initial state (enabled/disabled) */
-			if (values[state_col].val.int_val == REG_DB_STATE_ENABLED)
-				uac_param.flags |= REG_ENABLED;
+		/* Get the user agent (only if column was queried) */
+		if (has_user_agent_col) {
+			uac_param.user_agent.s =
+				(char*)values[user_agent_col].val.string_val;
+			if (uac_param.user_agent.s)
+				uac_param.user_agent.len = strlen(uac_param.user_agent.s);
+			if (uac_param.user_agent.len == 0) uac_param.user_agent.s = NULL;
+		}
+
+		/* Get the initial state (enabled/disabled) */
+		if (values[state_col].val.int_val == REG_DB_STATE_ENABLED)
+			uac_param.flags |= REG_ENABLED;
 
 			LM_DBG("registrar=[%.*s] AOR=[%.*s] auth_user=[%.*s] "
 				"password=[%.*s] expire=[%d] proxy=[%.*s] "
 				"contact=[%.*s] third_party=[%.*s] "
-				"cluster_shtag=[%.*s/%d] state=[%d]\n",
+				"cluster_shtag=[%.*s/%d] state=[%d] server_expiry=[%.*s] \n",
 				uac_param.registrar_uri.len, uac_param.registrar_uri.s,
 				uac_param.to_uri.len, uac_param.to_uri.s,
 				uac_param.auth_user.len, uac_param.auth_user.s,
@@ -431,7 +462,8 @@ int load_reg_info_from_db(unsigned int mode, record_coords_t *coords)
 				uac_param.from_uri.len, uac_param.from_uri.s,
 				uac_param.cluster_shtag.len, uac_param.cluster_shtag.s,
 				uac_param.cluster_id,
-				values[state_col].val.int_val);
+				values[state_col].val.int_val,
+				uac_param.server_expiry.len, uac_param.server_expiry.s);
 			lock_get(&reg_htable[uac_param.hash_code].lock);
 			ret = add_record(&uac_param, &now, mode, coords);
 			lock_release(&reg_htable[uac_param.hash_code].lock);
@@ -468,36 +500,102 @@ error:
 
 int reg_update_db_state(reg_record_t *rec)
 {
-	db_key_t key_cols[REG_KEY_COL_NO] =
-		{&aor_column, &binding_URI_column, &registrar_column};
-	db_val_t key_vals[REG_KEY_COL_NO];
-	db_key_t update_key = &state_column;
-	db_val_t update_val;
+	if(run_db_custom_updates) {
+			db_key_t key_cols[REG_KEY_COL_NO] =
+				{&aor_column, &third_party_registrant_column, &third_party_registrant_column};
+			db_val_t key_vals[REG_KEY_COL_NO];
+			db_key_t update_key_cols[UPDATE_REC_COL_NO] = 
+			{&state_column, &registration_status_column, &local_port_column , &ip_column};
+			db_val_t update_val_cols[UPDATE_REC_COL_NO];
+			char* p;
+			struct ip_addr addr;
+			int len;
 
-	key_vals[0].type = DB_STR;
-	key_vals[0].nul = 0;
-	key_vals[1].type = DB_STR;
-	key_vals[1].nul = 0;
-	key_vals[2].type = DB_STR;
-	key_vals[2].nul = 0;
+			sockaddr2ip_addr(&addr, &rec->td.forced_to_su.s);
+			p = ip_addr2a(&addr);
+			if (p == NULL) {
+				LM_ERR("Dest IP not found. Please add details of users in log in future\n");
+			} else {
+				len = strlen(p);
+				rec->dest_ip.s=p;
+				rec->dest_ip.len=len;
+			}
+			key_vals[0].type = DB_STR;
+			key_vals[0].nul = 0;
+			key_vals[1].type = DB_STR;
+			key_vals[1].nul = 0;
+			key_vals[2].type = DB_STR;
+			key_vals[2].nul = 0;
 
-	VAL_STR(&key_vals[0]) = rec->td.rem_uri;
-	VAL_STR(&key_vals[1]) = rec->contact_uri;
-	VAL_STR(&key_vals[2]) = rec->td.rem_target;
 
-	VAL_TYPE(&update_val) = DB_INT;
-	VAL_NULL(&update_val) = 0;
-	VAL_INT(&update_val) = rec->flags&REG_ENABLED ? 0 : 1;
+			VAL_STR(&key_vals[0]) = rec->td.rem_uri;
+			VAL_STR(&key_vals[1]) = rec->third_party_registrant;
+			VAL_STR(&key_vals[2]) = rec->third_party_registrant;
 
-	if(use_reg_table()) return -1;
+			/* TRAG-15021 Auto-disable on failure: reset error states to waiting state */
+			if (auto_disable_on_failure && 
+				(rec->state == WRONG_CREDENTIALS_STATE || rec->state == REGISTRAR_ERROR_STATE)) {
+				rec->flags &= ~REG_ENABLED;
+			}
 
-	if (reg_dbf.update(reg_db_handle, key_cols, 0, key_vals, &update_key,
-		&update_val, 1, 1) < 0) {
-		LM_ERR("Failed to update registrant state in database\n");
-		return -1;
+			VAL_TYPE(&update_val_cols[0]) = DB_INT;
+			VAL_NULL(&update_val_cols[0]) = 0;
+			VAL_INT(&update_val_cols[0]) = rec->flags&REG_ENABLED ? 0 : 1;
+
+			VAL_TYPE(&update_val_cols[1]) = DB_INT;
+			VAL_NULL(&update_val_cols[1]) = 0;
+			VAL_INT(&update_val_cols[1]) = rec->state;
+
+			VAL_TYPE(&update_val_cols[2]) = DB_INT;
+			VAL_NULL(&update_val_cols[2]) = 0;
+			VAL_INT(&update_val_cols[2]) = rec->local_src_port;
+
+			update_val_cols[3].type = DB_STR;
+			update_val_cols[3].nul = 0;
+			VAL_STR(&update_val_cols[3]) = rec->dest_ip;
+
+			if(use_reg_table()) return -1;
+
+
+			if (reg_dbf.update(reg_db_handle, key_cols, 0, key_vals, &update_key_cols,
+				&update_val_cols, 3, 4) < 0) {
+				LM_ERR("Failed to update registrant state in database\n");
+				return -1;
+			}
+
+			return 0;
+	} else {
+				db_key_t key_cols[REG_KEY_COL_NO] =
+				{&aor_column, &third_party_registrant_column, &third_party_registrant_column};
+				db_val_t key_vals[REG_KEY_COL_NO];
+				db_key_t update_key = &state_column;
+				db_val_t update_val;
+
+				key_vals[0].type = DB_STR;
+				key_vals[0].nul = 0;
+				key_vals[1].type = DB_STR;
+				key_vals[1].nul = 0;
+				key_vals[2].type = DB_STR;
+				key_vals[2].nul = 0;
+
+				VAL_STR(&key_vals[0]) = rec->td.rem_uri;
+				VAL_STR(&key_vals[1]) = rec->third_party_registrant;
+				VAL_STR(&key_vals[2]) = rec->third_party_registrant;
+
+				VAL_TYPE(&update_val) = DB_INT;
+				VAL_NULL(&update_val) = 0;
+				VAL_INT(&update_val) = rec->flags&REG_ENABLED ? 0 : 1;
+
+				if(use_reg_table()) return -1;
+
+				if (reg_dbf.update(reg_db_handle, key_cols, 0, key_vals, &update_key,
+					&update_val, 1, 1) < 0) {
+					LM_ERR("Failed to update registrant state in database\n");
+					return -1;
+				}
+
+				return 0;
 	}
-
-	return 0;
 }
 
 int init_reg_db(const str *db_url)

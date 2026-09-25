@@ -100,6 +100,13 @@ int onreply_avp_mode = 0;
 /* disable the 6xx fork-blocking - default no (as per RFC3261) */
 int disable_6xx_block = 0;
 
+/* DNS-failover / blacklist policy for received replies:
+ *   0 - original behaviour (failover on 503 + timeout, blacklist on failover)
+ *   1 - failover and blacklist the failed IP on ANY genuinely received 5xx
+ *   2 - failover and blacklist the failed IP on a genuinely received 503 only
+ * (a timeout always fails over but is never blacklisted in modes 1 and 2) */
+int blacklist_5xx = 0;
+
 /* flag for marking minor branches */
 int minor_branch_flag = -1;
 char *minor_branch_flag_str = 0;
@@ -648,6 +655,17 @@ static inline int is_3263_failure(struct cell *t)
 		picked_branch, t->uac[picked_branch].last_received,
 		t->uac[picked_branch].flags);
 
+	/* blacklist_5xx policy: broaden the DNS-failover trigger for 5xx.
+	 *   mode 1 -> any genuinely received 5xx
+	 *   mode 2 -> a genuinely received 503 only */
+	if (blacklist_5xx && t->uac[picked_branch].reply!=NULL &&
+	t->uac[picked_branch].reply!=FAKED_REPLY) {
+		int code = t->uac[picked_branch].last_received;
+		if ((blacklist_5xx==1 && code>=500 && code<600) ||
+		    (blacklist_5xx==2 && code==503))
+			return 1;
+	}
+
 	switch (t->uac[picked_branch].last_received) {
 		case 408:
 			return ((t->uac[picked_branch].flags&T_UAC_HAS_RECV_REPLY)==0);
@@ -673,12 +691,28 @@ static inline int do_dns_failover(struct cell *t)
 	struct sip_msg *req;
 	struct ua_client *uac;
 	dlg_t dialog;
-	int ret, sip_msg_len;
+	int ret, sip_msg_len, add_to_bl;
 
 	uac = &t->uac[picked_branch];
 
+	/* decide whether to blacklist the failed IP:
+	 *   mode 0 -> always (original behaviour)
+	 *   mode 1 -> only on a 5xx (timeout fails over without blacklisting)
+	 *   mode 2 -> only on a 503 */
+	switch (blacklist_5xx) {
+		case 1:
+			add_to_bl = (uac->last_received>=500 &&
+				uac->last_received<600) ? 1 : 0;
+			break;
+		case 2:
+			add_to_bl = (uac->last_received==503) ? 1 : 0;
+			break;
+		default:
+			add_to_bl = 1;
+	}
+
 	/* check if the DNS resolver can get at least one new IP */
-	if ( get_next_su( uac->proxy, &uac->request.dst.to, 1)!=0 )
+	if ( get_next_su( uac->proxy, &uac->request.dst.to, add_to_bl)!=0 )
 		return -1;
 
 	LM_DBG("new destination available\n");

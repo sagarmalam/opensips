@@ -774,8 +774,8 @@ char* build_uac_req(str* method, str* headers, str* body, dlg_t* dialog,
 {
 	char* buf, *w;
 	str content_length, cseq, via, mf;
-	str *cid = tm_via_cid();
-
+	//str *cid = tm_via_cid(); Commented by sagar malam to add rport in all the via headers
+	static str rport = str_init(";rport;alias");
 	if (!method || !dialog) {
 		LM_ERR("inalid parameter value\n");
 		return 0;
@@ -791,7 +791,7 @@ char* build_uac_req(str* method, str* headers, str* body, dlg_t* dialog,
 	*len = method->len + 1 + dialog->hooks.request_uri->len + 1 +
 		SIP_VERSION_LEN + CRLF_LEN;
 
-	if (assemble_via(&via, t, dialog->send_sock, branch, cid) < 0) {
+	if (assemble_via(&via, t, dialog->send_sock, branch, &rport) < 0) {
 		LM_ERR("failed to assemble Via\n");
 		return 0;
 	}

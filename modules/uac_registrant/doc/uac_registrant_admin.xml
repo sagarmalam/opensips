@@ -181,6 +181,38 @@ modparam("uac_registrant", "enable_clustering", 1)
 		</example>
 	</section>
 
+	<section id="param_enable_failover" xreflabel="enable_failover">
+		<title><varname>enable_failover</varname> (integer)</title>
+		<para>
+		Controls destination failover for registrars given as an FQDN that
+		resolves to multiple targets (DNS SRV / multiple A/AAAA records).
+		By default the module pins a registrant to the resolved destination
+		of its first successful REGISTER and keeps re-registering on that
+		same server. A timeout / no response (internally seen as a
+		<emphasis>FAKED_REPLY</emphasis>) always releases that pin so the
+		next REGISTER re-resolves and can move to another server.
+		</para>
+		<para>
+		When this parameter is enabled, a <emphasis>503</emphasis> or
+		<emphasis>408</emphasis> final reply also releases the pin, so the
+		next REGISTER re-resolves the FQDN/SRV and fails over to another
+		target instead of staying stuck on the failing server.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0 / off.
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>enable_failover</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("uac_registrant", "enable_failover", 1)
+...
+</programlisting>
+		</example>
+	</section>
+
 	<section id="param_db_url" xreflabel="db_url">
 		<title><varname>db_url</varname> (string)</title>
 		<para>
