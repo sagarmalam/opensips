@@ -26,6 +26,7 @@
 
 
 #include <ctype.h>
+#include <limits.h>
 #include <string.h>
 
 #include "../../str.h"
@@ -53,6 +54,7 @@ extern str rr_uac_cseq_param;
 extern struct rr_binds uac_rrb;
 extern struct dlg_binds dlg_api;
 extern int enable_refresh_cnonce;
+extern int auth_cseq_from_reply;
 
 static inline int apply_urihdr_changes( struct sip_msg *req,
 													str *uri, str *hdr)
@@ -255,6 +257,39 @@ static int uac_auth_dlg_leg(struct dlg_cell *dlg, str *tag)
 		return callee_idx(dlg);
 }
 
+/* CSeq of the challenged request, as echoed by the reply; 0 if not available */
+static unsigned int uac_auth_rpl_cseq(struct sip_msg *rpl)
+{
+	unsigned int cseq_no;
+
+	if (!rpl->cseq || !rpl->cseq->parsed ||
+	str2int(&get_cseq(rpl)->number, &cseq_no) < 0) {
+		LM_WARN("cannot get CSeq from reply, using default increment\n");
+		return 0;
+	}
+
+	return cseq_no;
+}
+
+/* increment to apply over the request's CSeq so that the new CSeq is
+ * above the challenged one (rpl_cseq); never less than 1 */
+static int uac_auth_cseq_inc(struct sip_msg *msg, unsigned int rpl_cseq)
+{
+	unsigned int msg_cseq;
+
+	if (rpl_cseq == 0)
+		return 1;
+
+	if (parse_headers(msg, HDR_CSEQ_F, 0) < 0 || !msg->cseq ||
+	str2int(&get_cseq(msg)->number, &msg_cseq) < 0)
+		return 1;
+
+	if (rpl_cseq < msg_cseq || rpl_cseq - msg_cseq >= INT_MAX)
+		return 1;
+
+	return (int)(rpl_cseq - msg_cseq) + 1;
+}
+
 int uac_auth( struct sip_msg *msg, int algmask)
 {
 	struct authenticate_body *auth = NULL;
@@ -262,6 +297,7 @@ int uac_auth( struct sip_msg *msg, int algmask)
 	static struct authenticate_nc_cnonce auth_nc_cnonce;
 	struct uac_credential *crd;
 	int code, branch, leg, new_cseq;
+	unsigned int rpl_cseq = 0;
 	struct sip_msg *rpl;
 	struct cell *t;
 	struct digest_auth_response response;
@@ -302,6 +338,9 @@ int uac_auth( struct sip_msg *msg, int algmask)
 		LM_ERR("cannot process a FAKED reply\n");
 		goto error;
 	}
+
+	if (auth_cseq_from_reply)
+		rpl_cseq = uac_auth_rpl_cseq(rpl);
 
 	mdesc = (algmask) ? DAUTH_AHFM_MSKSUP(algmask) :
 	    DAUTH_AHFM_ANYSUP;
@@ -393,7 +432,8 @@ int uac_auth( struct sip_msg *msg, int algmask)
 
 		/* initial request or no dialog support
 		 * => do the changes over cseq from here */
-		if ( (new_cseq = apply_cseq_op(msg,1)) < 0) {
+		if ( (new_cseq = apply_cseq_op(msg,
+		uac_auth_cseq_inc(msg, rpl_cseq))) < 0) {
 			LM_WARN("Failure to increment the CSEQ header - continue \n");
 			goto error;
 		}
@@ -457,6 +497,10 @@ int uac_auth( struct sip_msg *msg, int algmask)
 		 * about the cseq increasing */
 		leg = uac_auth_dlg_leg(dlg, &ttag);
 		new_cseq = ++dlg->legs[leg].last_gen_cseq;
+		/* make sure we go above the challenged CSeq */
+		if (rpl_cseq && rpl_cseq < INT_MAX &&
+		rpl_cseq >= dlg->legs[leg].last_gen_cseq)
+			new_cseq = dlg->legs[leg].last_gen_cseq = rpl_cseq + 1;
 		LM_DBG("incrementing last_gen_cseq to [%d] for leg[%d]\n", new_cseq, leg);
 
 		/* as we expect to have the request already altered (by the dialog 

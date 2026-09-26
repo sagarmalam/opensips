@@ -226,6 +226,35 @@ modparam("uac", "enable_refresh_cnonce", 1)
 				</programlisting>
 			</example>
 		</section>
+
+		<section id="param_auth_cseq_from_reply" xreflabel="auth_cseq_from_reply">
+			<title><varname>auth_cseq_from_reply</varname> (int)</title>
+			<para>
+				When enabled, <emphasis>uac_auth()</emphasis> computes the CSeq of
+				the authenticated request based on the CSeq of the received
+				401/407 reply (reply CSeq + 1), instead of the CSeq of the
+				request as received by OpenSIPS (request CSeq + 1). The new CSeq
+				is never lower than the one computed when this parameter is
+				disabled.
+			</para>
+			<para>
+				This is useful when the CSeq of the challenged request was
+				already changed on its way out (e.g. in-dialog requests with
+				CSeq managed by the dialog module), so that the authenticated
+				request does not reuse the CSeq of the challenged one.
+			</para>
+			<para>
+				Default value is 0 / off (legacy behavior preserved exactly).
+			</para>
+			<example>
+				<title>Set <varname>auth_cseq_from_reply</varname> parameter</title>
+				<programlisting format="linespecific">
+...
+modparam("uac", "auth_cseq_from_reply", 1)
+...
+				</programlisting>
+			</example>
+		</section>
 	</section>
 
 
@@ -332,7 +361,8 @@ uac_restore_from();
 			</listitem>
 			</itemizedlist>
 			<para>
-			Note that the CSeq is automatically increased during authentication.
+			Note that the CSeq is automatically increased during authentication
+			(see <xref linkend="param_auth_cseq_from_reply"/>).
 			</para>
 			<para>
 			This function can be used from FAILURE_ROUTE.

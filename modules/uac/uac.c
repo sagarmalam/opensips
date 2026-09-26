@@ -78,6 +78,8 @@ uac_auth_api_t uac_auth_api;
 int force_dialog = 0;
 /* refresh cnonce per auth attempt (seeded with Call-ID+CSeq); off by default */
 int enable_refresh_cnonce = 0;
+/* compute the authenticated request's CSeq from the 401/407 reply; off by default */
+int auth_cseq_from_reply = 0;
 struct dlg_binds dlg_api;
 
 static int w_replace_from(struct sip_msg* msg, str* p1, str* p2);
@@ -126,6 +128,7 @@ static const param_export_t params[] = {
 	{"restore_passwd",      STR_PARAM,                &uac_passwd.s          },
 	{"force_dialog",        INT_PARAM,                &force_dialog          },
 	{"enable_refresh_cnonce", INT_PARAM,              &enable_refresh_cnonce },
+	{"auth_cseq_from_reply", INT_PARAM,               &auth_cseq_from_reply  },
 	{0, 0, 0}
 };
 
