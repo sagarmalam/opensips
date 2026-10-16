@@ -533,8 +533,16 @@ int reg_update_db_state(reg_record_t *rec)
 			VAL_STR(&key_vals[2]) = rec->third_party_registrant;
 
 			/* TRAG-15021 Auto-disable on failure: reset error states to waiting state */
-			if (auto_disable_on_failure && 
+			if (auto_disable_on_failure &&
 				(rec->state == WRONG_CREDENTIALS_STATE || rec->state == REGISTRAR_ERROR_STATE)) {
+				//TRAG-15815
+				if (rec->flags & REG_ENABLED)
+					LM_ALERT("auto-disabling registrant third_party_registrant=[%.*s]"
+						" registrar=[%.*s] state=[%d] rpl_code=[%d] dst_ip=[%.*s]\n",
+						rec->third_party_registrant.len, rec->third_party_registrant.s,
+						rec->td.rem_target.len, rec->td.rem_target.s, rec->state,
+						rec->last_rpl_code,
+						rec->dest_ip.len, rec->dest_ip.s);
 				rec->flags &= ~REG_ENABLED;
 			}
 

@@ -427,6 +427,7 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 	}
 
 	statuscode = ps->code;
+	rec->last_rpl_code = statuscode;//TRAG-15815
 	switch(statuscode) {
 	case 200:
 		if(rec->td.send_sock ){
