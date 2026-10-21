@@ -70,7 +70,7 @@
 #define EVENT_RT_NO   RT_NO 	/*!< Event routing tables number */
 #define DEFAULT_RT 0 		/*!< default routing table */
 
-#define MAX_REC_LEV 100		/*!< maximum number of recursive calls */
+#define MAX_REC_LEV 200		/*!< maximum number of recursive calls TRAG16629*/
 #define ROUTE_MAX_REC_LEV 100 /*!< maximum number of recursive calls for route()*/
 
 #define MAX_URI_SIZE 1024	/*!< used when rewriting URIs */

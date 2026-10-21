@@ -168,7 +168,8 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		uac->to_uri.len + uac->from_uri.len + uac->registrar_uri.len +
 		uac->auth_user.len + uac->auth_password.len +
 		uac->contact_uri.len + uac->contact_params.len + uac->proxy_uri.len +
-		uac->cluster_shtag.len;
+		uac->cluster_shtag.len + uac->server_expiry.len + uac->proxy_uri.len + uac->from_uri.len +
+		uac->user_agent.len;
 
 	if (mode == REG_DB_LOAD_RECORD) {
 		new_elem = slinkedl_new_element(&reg_alloc, size, (void**)&record);
@@ -226,16 +227,31 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		p += uac->proxy_uri.len;
 	}
 
+	/////////////////////Always take from URI from aor and not from third party registrant////////////////////
 	/* Setting the local URI */
+	if(td->rem_uri.s && td->rem_uri.len) {
+		LM_DBG("got from [%.*s]\n", td->rem_uri.len, td->rem_uri.s);
+		td->loc_uri.s = p;
+		td->loc_uri.len = td->rem_uri.len;
+		memcpy(p, td->rem_uri.s, td->rem_uri.len);
+		p += td->rem_uri.len;
+	} else {
+		
+		td->loc_uri.s = td->rem_uri.s;
+		td->loc_uri.len = td->rem_uri.len;
+	}
+	////////////////////////////////////////
+	
+	/* Setting third party registrant from database */
 	if(uac->from_uri.s && uac->from_uri.len) {
 		LM_DBG("got from [%.*s]\n", uac->from_uri.len, uac->from_uri.s);
-		td->loc_uri.s = p;
-		td->loc_uri.len = uac->from_uri.len;
+		record->third_party_registrant.s = p;
+		record->third_party_registrant.len = uac->from_uri.len;
 		memcpy(p, uac->from_uri.s, uac->from_uri.len);
 		p += uac->from_uri.len;
 	} else {
-		td->loc_uri.s = td->rem_uri.s;
-		td->loc_uri.len = td->rem_uri.len;
+		record->third_party_registrant.s = td->rem_uri.s;
+		record->third_party_registrant.len = td->rem_uri.len;
 	}
 
 	/* Setting the Remote target URI */
@@ -265,6 +281,20 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		memcpy(p, uac->auth_user.s, uac->auth_user.len);
 		p += uac->auth_user.len;
 	}
+	
+	if (uac->server_expiry.s && uac->server_expiry.len) {
+		record->server_expiry.s = p;
+		record->server_expiry.len = uac->server_expiry.len;
+		memcpy(p, uac->server_expiry.s, uac->server_expiry.len);
+		p += uac->server_expiry.len;
+	}
+	
+	if (uac->proxy_uri.s && uac->proxy_uri.len) {
+		record->proxy_uri.s = p;
+		record->proxy_uri.len = uac->proxy_uri.len;
+		memcpy(p, uac->proxy_uri.s, uac->proxy_uri.len);
+		p += uac->proxy_uri.len;
+	}
 
 	if (uac->auth_password.s && uac->auth_password.len) {
 		record->auth_password.s = p;
@@ -292,6 +322,14 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		record->cluster_shtag.len = uac->cluster_shtag.len;
 		memcpy(p, uac->cluster_shtag.s, uac->cluster_shtag.len);
 		p += uac->cluster_shtag.len;
+	}
+
+	/* Setting the user agent */
+	if (uac->user_agent.s && uac->user_agent.len) {
+		record->user_agent.s = p;
+		record->user_agent.len = uac->user_agent.len;
+		memcpy(p, uac->user_agent.s, uac->user_agent.len);
+		p += uac->user_agent.len;
 	}
 
 	/* Setting the flags */

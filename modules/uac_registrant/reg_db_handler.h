@@ -45,16 +45,23 @@
 #define FORCED_SOCKET_COL		"forced_socket"
 #define CLUSTER_SHTAG_COL		"cluster_shtag"
 #define STATE_COL				"state"
+#define SERVER_EXPIRY_COL		"server_expiry"
+#define REGISTRATION_STATUS_COL		"registration_status"
+#define LOCAL_PORT_COL		"local_port"
+#define IP_COL		"ip"
+#define USER_AGENT_COL		"user_agent"
 
 #define REG_TABLE_NAME			"registrant"
 
 #define REG_TABLE_VERSION		3
 
-#define REG_TABLE_TOTAL_COL_NO		12
+#define REG_TABLE_TOTAL_COL_NO		14
 
 #define REG_FETCH_SIZE			128
 
 #define REG_KEY_COL_NO 3
+
+#define UPDATE_REC_COL_NO 4
 
 #define REG_DB_STATE_ENABLED  0
 
@@ -70,10 +77,13 @@ extern str expiry_column;
 extern str forced_socket_column;
 extern str cluster_shtag_column;
 extern str state_column;
+extern str server_expiry_column;
+extern str user_agent_column;
 
 extern str reg_table_name;
 
 extern unsigned int timer_interval;
+extern unsigned int enable_custom_user_agent;
 
 int init_reg_db(const str *db_url);
 int connect_reg_db(const str *db_url);
