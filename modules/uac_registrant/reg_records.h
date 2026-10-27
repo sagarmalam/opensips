@@ -100,6 +100,10 @@ typedef struct reg_record {
 	int failed_attempts; // Counter for failed attempts since last reload - sagar
 	int last_rpl_code; // last final reply code received for this registrant TRAG-15815
 	unsigned int flags;
+	char last_nonce[128];        // nc-increment: last challenge nonce seen
+	unsigned int last_nonce_len; // nc-increment: length of last_nonce
+	unsigned int nc;             // nc-increment: nonce-count for last_nonce
+	char nc_buf[9];              // nc-increment: "%08x" nc for Authorization
 	struct reg_record *prev;
 	struct reg_record *next;
 	int local_src_port //local port used by opensips to send register request
