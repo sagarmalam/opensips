@@ -53,6 +53,7 @@ extern char tm_tags[TOTAG_VALUE_LEN];
 extern char *tm_tag_suffix;
 
 extern int disable_6xx_block;
+extern int blacklist_5xx;
 
 /* flag for marking minor branches */
 extern int minor_branch_flag;
