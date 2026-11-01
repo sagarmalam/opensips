@@ -37,8 +37,6 @@
 #include "../../md5.h"
 #include "../../parser/parse_authenticate.h"
 #include "../../parser/msg_parser.h"
-#include "../../hash_func.h"
-#include "../../ut.h"
 #include "../tm/tm_load.h"
 #include "../uac_auth/uac_auth.h"
 #include "../../lib/digest_auth/digest_auth.h"
@@ -52,7 +50,6 @@ extern uac_auth_api_t uac_auth_api;
 extern str rr_uac_cseq_param;
 extern struct rr_binds uac_rrb;
 extern struct dlg_binds dlg_api;
-extern int enable_refresh_cnonce;
 
 static inline int apply_urihdr_changes( struct sip_msg *req,
 													str *uri, str *hdr)
@@ -270,8 +267,6 @@ int uac_auth( struct sip_msg *msg, int algmask)
 	char *p;
 	struct dlg_cell *dlg;
 	const struct match_auth_hf_desc *mdesc;
-	/* refreshed cnonce storage; must outlive _do_uac_auth + _build_authorization_hdr */
-	char cnonce_buf[INT2STR_MAX_LEN];
 
 	/* get transaction */
 	t = uac_tmb.t_gett();
@@ -332,21 +327,14 @@ int uac_auth( struct sip_msg *msg, int algmask)
 		goto error;
 	}
 
-	/* refresh cnonce (INVITE/seq requests) so digest differs when nonce is reused;
-	 * in_cnonce is static-zeroed and untouched when disabled -> legacy behavior */
-	if (enable_refresh_cnonce) {
-		/* seed cnonce with Call-ID+CSeq -> unique per request */
-		str cid = STR_NULL;
-		unsigned int h, cseq_val = 0;
-		int cn_len = 0;
-
-		get_callid(msg, &cid);
-		if (parse_headers(msg, HDR_CSEQ_F, 0) == 0 && msg->cseq)
-			str2int(&get_cseq(msg)->number, &cseq_val);
-		h = core_hash(&auth->nonce, &cid, 0) ^ cseq_val;
-		auth_nc_cnonce.in_cnonce.s = int2bstr(h, cnonce_buf, &cn_len);
-		auth_nc_cnonce.in_cnonce.len = cn_len;
-	}
+	/* inputs for the optional cnonce refresh (uac_auth "enable_refresh_cnonce");
+	 * plain reads of headers already parsed by TM, ignored when disabled */
+	auth_nc_cnonce.callid.len = 0;
+	auth_nc_cnonce.cseq = 0;
+	if (msg->callid)
+		auth_nc_cnonce.callid = msg->callid->body;
+	if (msg->cseq && msg->cseq->parsed)
+		str2int(&get_cseq(msg)->number, &auth_nc_cnonce.cseq);
 
 	/* do authentication */
 	if (uac_auth_api._do_uac_auth(&msg_body, &msg->first_line.u.request.method,
