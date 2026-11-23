@@ -46,6 +46,7 @@ extern int            user_avp_name;
 extern unsigned short user_avp_type;
 extern int            pwd_avp_name;
 extern unsigned short pwd_avp_type;
+extern int            enable_refresh_cnonce;
 
 
 static struct uac_credential *crd_list = NULL;
@@ -273,7 +274,12 @@ int do_uac_auth(str *msg_body, str *method, str *uri, struct uac_credential *crd
 	{
 		/* if qop generate nonce-count and cnonce */
 		nc = str_const_init("00000001");
-		cnonce.s = int2str(core_hash(&auth->nonce, NULL, 0),&cnonce.len);
+		if (enable_refresh_cnonce && auth_nc_cnonce->callid.len)
+			/* unique per request, even if the server reuses the nonce */
+			cnonce.s = int2str(core_hash(&auth->nonce, &auth_nc_cnonce->callid, 0)
+				^ auth_nc_cnonce->cseq, &cnonce.len);
+		else
+			cnonce.s = int2str(core_hash(&auth->nonce, NULL, 0),&cnonce.len);
 
 		/* do authentication */
 		if (!has_ha1)

@@ -163,6 +163,43 @@ modparam("uac_auth","auth_password_avp","$avp(12)")
 			</example>
 		</section>
 
+		<section id="param_enable_refresh_cnonce" xreflabel="enable_refresh_cnonce">
+			<title><varname>enable_refresh_cnonce</varname> (integer)</title>
+			<para>
+			Controls how the client nonce (<emphasis>cnonce</emphasis>) is
+			generated when answering a digest challenge with
+			<emphasis>qop</emphasis>. By default the cnonce is derived only
+			from the server nonce, so as long as the server keeps re-issuing
+			the same nonce, every authenticated request carries an identical
+			digest response. Servers running a digest replay guard may then
+			reject it (e.g. <emphasis>403 Forbidden - Digest replay attack
+			detected</emphasis>).
+			</para>
+			<para>
+			When enabled, the cnonce is seeded with the server nonce plus the
+			Call-ID and CSeq of the challenged request, so each request gets a
+			distinct cnonce and digest response. It applies to the modules
+			using <emphasis>uac_auth</emphasis> that provide the Call-ID and
+			CSeq: <emphasis>uac</emphasis> (uac_auth() function) and
+			<emphasis>uac_registrant</emphasis>. The nonce-count
+			(<emphasis>nc</emphasis>) is unchanged.
+			</para>
+			<para>
+			<emphasis>
+				Default value is 0 / off (legacy behavior).
+			</emphasis>
+			</para>
+			<example>
+				<title><varname>enable_refresh_cnonce</varname> parameter usage</title>
+				<programlisting format="linespecific">
+
+...
+modparam("uac_auth","enable_refresh_cnonce",1)
+...
+				</programlisting>
+			</example>
+		</section>
+
 	</section>
 
 </chapter>

@@ -51,6 +51,8 @@ int            user_avp_name = 0;
 unsigned short user_avp_type=0;
 int            pwd_avp_name = 0;
 unsigned short pwd_avp_type=0;
+/* seed qop cnonce with Call-ID+CSeq (if provided by caller); off by default */
+int            enable_refresh_cnonce = 0;
 
 
 /** Exported functions */
@@ -65,6 +67,7 @@ static const param_export_t params[]= {
 	{"auth_username_avp",   STR_PARAM,                &auth_username_avp     },
 	{"auth_realm_avp",      STR_PARAM,                &auth_realm_avp        },
 	{"auth_password_avp",   STR_PARAM,                &auth_password_avp     },
+	{"enable_refresh_cnonce", INT_PARAM,              &enable_refresh_cnonce },
 
 	{0,0,0}
 };

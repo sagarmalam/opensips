@@ -327,6 +327,15 @@ int uac_auth( struct sip_msg *msg, int algmask)
 		goto error;
 	}
 
+	/* inputs for the optional cnonce refresh (uac_auth "enable_refresh_cnonce");
+	 * plain reads of headers already parsed by TM, ignored when disabled */
+	auth_nc_cnonce.callid.len = 0;
+	auth_nc_cnonce.cseq = 0;
+	if (msg->callid)
+		auth_nc_cnonce.callid = msg->callid->body;
+	if (msg->cseq && msg->cseq->parsed)
+		str2int(&get_cseq(msg)->number, &auth_nc_cnonce.cseq);
+
 	/* do authentication */
 	if (uac_auth_api._do_uac_auth(&msg_body, &msg->first_line.u.request.method,
 	    &t->uac[branch].uri, crd, auth, &auth_nc_cnonce, &response) != 0) {

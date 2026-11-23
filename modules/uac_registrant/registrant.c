@@ -739,6 +739,9 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 		}
 
 		memset(&auth_nc_cnonce, 0, sizeof(struct authenticate_nc_cnonce));
+		/* inputs for the optional cnonce refresh (uac_auth "enable_refresh_cnonce") */
+		auth_nc_cnonce.callid = rec->td.id.call_id;
+		auth_nc_cnonce.cseq = rec->td.loc_seq.value;
 		if (uac_auth_api._do_uac_auth(&msg_body, &register_method,
 		    &rec->td.rem_target, &crd, auth, &auth_nc_cnonce, &response) != 0) {
 			LM_ERR("Failed in do_uac_auth()\n");
